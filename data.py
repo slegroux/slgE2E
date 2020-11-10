@@ -68,4 +68,13 @@ class Data(object):
         self._test_tf = torchaudio.transforms.MelSpectrogram()
     
     def data_prep(self):
-        
+        self.init_tf()
+        specgrams_train, specgrams_test = [], []
+        labels_train, labels_test = [], []
+        for (waveform, sample_rate, utterance, speaker_id, chapter_id, utterance_id) in self.train_ds:
+            spec = self.train_tf(waveform).squeeze(0).transpose(0,1)
+            label = self.
+            specgrams_train.append(spec)
+
+        return(specgrams)
+
