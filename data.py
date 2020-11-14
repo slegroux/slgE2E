@@ -1,15 +1,20 @@
 import torchaudio
 import torch
 from torch.utils.data import Dataset
+from torchaudio.datasets import LIBRISPEECH
 import torch.nn as nn
 import string
-from typing import List, Set, Dict, Tuple, Optional
+from typing import List, Set, Dict, Tuple, Optional, Callable
+from torch import Tensor
 from IPython import embed
 
 LIBRI_DIR = "/home/syl20/data/en/librispeech"
 
 
-class CharMap:
+class CharacterTokenizer:
+    """
+    Convert sentences into indices of characters and back
+    """
     def __init__(self):
         m = {}
         m["'"] = 0
@@ -52,48 +57,28 @@ class CharMap:
         return(''.join(chars).replace("<SPACE>", ' '))
         
 
-class Data(object):
-    def __init__(self):
-        self.train_ds, self.test_ds = None, None
-        self.train_tf, self.test_tf = None, None
+class LibriDataset(LIBRISPEECH):
+    def __init__(self, root_dir:str, tokenizer:Callable, dataset:str="train-clean-100",  transform:Callable=None):
+        super().__init__(root_dir, url=dataset, download=False)
+        self.transform = transform
+        self.tokenizer = tokenizer()
 
-    def get_libri_ds(self, data_dir:str=LIBRI_DIR)->Tuple[Dataset, Dataset]:
-        self.train_ds = torchaudio.datasets.LIBRISPEECH(data_dir, url="train-clean-100", download=False)
-        self.test_ds = torchaudio.datasets.LIBRISPEECH(data_dir, url="test-clean", download=False)
-        return(self.train_ds, self.test_ds)
+    def __getitem__(self, n:int)->Tuple[Tensor, int, str, int, int, int]:
+        (waveform, sample_rate, utterance, speaker_id, chapter_id, utterance_id) = \
+            super().__getitem__(n)
+        if self.transform:
+            waveform = self.transform(waveform)
 
-    def init_tf(self):
-        self.train_tf = nn.Sequential(
-            torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_mels=128),
-            torchaudio.transforms.FrequencyMasking(freq_mask_param=15),
-            torchaudio.transforms.TimeMasking(time_mask_param=35)
-        )
-        self.test_tf = torchaudio.transforms.MelSpectrogram()
-    
-    def data_prep(self):
-        self.init_tf()
-        cm = CharMap()
-        specgrams_train, specgrams_test = [], []
-        labels_train, labels_test = [], []
-        for (waveform, sample_rate, utterance, speaker_id, chapter_id, utterance_id) in self.train_ds:
-            # waveform: (1, n_samples)
-            # spec = (1, n_bins, n_frames)
-            # dim 1 is useless =>squeeze(0) + padding requires padding dim to be first => transpose(0,1)
-            specgrams_train.append(self.train_tf(waveform).squeeze(0).transpose(0,1))
-            labels_train.append(torch.Tensor(cm.text2int(utterance)))
-        
-        for (waveform, sample_rate, utterance, speaker_id, chapter_id, utterance_id) in self.test_ds:
-            # waveform: (1, n_samples)
-            # spec = (1, n_bins, n_frames)
-            specgrams_test.append(self.test_tf(waveform).squeeze(0).transpose(0,1))
-            labels_test.append(torch.Tensor(cm.text2int(utterance)))
+        return(waveform, sample_rate, utterance, torch.Tensor(self.tokenizer.text2int(utterance)), speaker_id, chapter_id, utterance_id)
 
-        # pad
-        spec_train = nn.utils.rnn.pad_sequence(specgrams_train, batch_first=True).transpose(1,2)
-        text_train = nn.utils.rnn.pad_sequence(labels_train, batch_first=True, padding_value=cm.map['<PAD>'])
-        spec_test = nn.utils.rnn.pad_sequence(specgrams_test, batch_first=True).transpose(1,2)
-        text_test = nn.utils.rnn.pad_sequence(labels_test, batch_first=True, padding_value=cm.map['<PAD>'])
+    def collate(self, batch):
+        # (feature, sample_rate, utterance, tokens, speaker_id, chapter_id, utterance_id)
+        # features (channel * n_bin * n_frames)
+        # padding requires padding dim (n_frames) to be first => transpose(0,2)    
+        features = [ item[0].transpose(0,2) for item in batch ]
+        labels = [ item[3] for item in batch ]
+        labels = nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=self.tokenizer.map['<PAD>'])
+        # (batch,channel,n_bins,n_frames)
+        features = nn.utils.rnn.pad_sequence(features, batch_first=True, padding_value=0.0).transpose(1,3)
 
-        
-        return(spec_train, text_train, spec_test, text_test)
-
+        return([features,labels])
