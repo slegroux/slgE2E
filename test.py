@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 
-from data import CharacterTokenizer, LibriDataset
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import torchaudio
 from IPython import embed
 import pytest
+
+from data import CharacterTokenizer, LibriDataset
+from model import CNNLayerNorm
 
 def test_char_map():
     cm = CharacterTokenizer()
@@ -39,6 +41,11 @@ def test_ds():
         sample = next(iter(dl))
         assert (sample[0][0].shape) == (1, 128, 1258)
         assert (sample[1][0].shape) == torch.Size([220])
+
+    norm = CNNLayerNorm(128)
+    normed = norm(next(iter(dl))[0])
+    embed()
+
 
 
 
