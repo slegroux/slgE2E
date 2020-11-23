@@ -12,6 +12,7 @@ from decode import GreedyDecoder
 from metrics import wer, cer
 import torch.optim as optim
 from data import CharacterTokenizer, LibriDataset
+from IPython import embed
 
 # COMET_API_KEY = os.environ['COMET_API_KEY']
 COMET_API_KEY = None
@@ -43,16 +44,16 @@ def train(model, device, train_loader, criterion, optimizer, scheduler, epoch, i
     data_len = len(train_loader.dataset)
     with experiment.train():
         for batch_idx, _data in enumerate(train_loader):
-            spectrograms, labels = _data 
-            spectrograms, labels = spectrograms.to(device), labels.to(device)
+            spectrograms, labels, in_l, out_l = _data 
+            spectrograms, labels, in_l, out_l = spectrograms.to(device), labels.to(device), torch.IntTensor(in_l).to(device), torch.IntTensor(out_l).to(device)
 
             optimizer.zero_grad()
 
             output = model(spectrograms)  # (batch, time, n_class)
             output = F.log_softmax(output, dim=2)
             output = output.transpose(0, 1) # (time, batch, n_class)
-
-            loss = criterion(output, labels, output.shape[0], labels.shape[0])
+            embed()
+            loss = criterion(output, labels, in_l, out_l)
             loss.backward()
 
             experiment.log_metric('loss', loss.item(), step=iter_meter.get())
@@ -75,14 +76,14 @@ def test(model, device, test_loader, criterion, epoch, iter_meter, experiment):
     with experiment.test():
         with torch.no_grad():
             for i, _data in enumerate(test_loader):
-                spectrograms, labels = _data 
-                spectrograms, labels = spectrograms.to(device), labels.to(device)
+                spectrograms, labels, in_l, out_l = _data 
+                spectrograms, labels, in_l, out_l = spectrograms.to(device), labels.to(device), torch.IntTensor(in_l).to(device), torch.IntTensor(out_l).to(device)
 
                 output = model(spectrograms)  # (batch, time, n_class)
                 output = F.log_softmax(output, dim=2)
                 output = output.transpose(0, 1) # (time, batch, n_class)
 
-                loss = criterion(output, labels, output.shape[0], labels.shape[0])
+                loss = criterion(output, labels, in_l, out_l)
                 test_loss += loss.item() / len(test_loader)
 
                 decoded_preds, decoded_targets = GreedyDecoder(output.transpose(0, 1), labels, labels.shape[0])

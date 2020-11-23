@@ -75,13 +75,15 @@ class LibriDataset(LIBRISPEECH):
         return(waveform, sample_rate, utterance, torch.Tensor(self.tokenizer.text2int(utterance)), speaker_id, chapter_id, utterance_id)
 
     def collate(self, batch):
-        # (feature, sample_rate, utterance, tokens, speaker_id, chapter_id, utterance_id)
-        # features (channel * n_bin * n_frames)
-        # padding requires padding dim (n_frames) to be first => transpose(0,2)    
+        # batch: (feature, sample_rate, utterance, tokens, speaker_id, chapter_id, utterance_id)
+        # features: (channel * n_bin * n_frames)
+        features_len = [ item[0][0].shape[1] for item in batch ] # waveform first channel exract dim(n_frames)
+        # padding requires padding dim (n_frames) to be first => transpose(0,2)
         features = [ item[0].transpose(0,2) for item in batch ]
+        labels_len = [len(item[3]) for item in batch]
         labels = [ item[3] for item in batch ]
         labels = nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=self.tokenizer.map['<PAD>'])
         # (batch,channel,n_bins,n_frames)
         features = nn.utils.rnn.pad_sequence(features, batch_first=True, padding_value=0.0).transpose(1,3)
 
-        return([features,labels])
+        return([features, labels, features_len, labels_len])
