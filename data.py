@@ -11,6 +11,7 @@ from typing import List, Set, Dict, Tuple, Optional, Callable
 from torch import Tensor, IntTensor
 from IPython import embed
 
+torchaudio.set_audio_backend("sox_io")
 LIBRI_DIR = "/home/syl20/data/en/librispeech"
 
 
@@ -72,7 +73,7 @@ class LibriDataset(LIBRISPEECH):
             super().__getitem__(n)
         if self.transform:
             waveform = self.transform(waveform)
-        spec_len = waveform.shape[-1] #// 2
+        spec_len = waveform.shape[-1] // 2
         label = IntTensor(self.tokenizer.text2int(utterance))
         label_len = len(label)
         return(waveform, label, spec_len, label_len)
