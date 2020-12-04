@@ -1,33 +1,41 @@
 #!/usr/bin/env python
+# (c) 2020 Sylvain Le Groux <slegroux@ccrma.stanford.edu>
 
+# libs
 import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning) 
-
-from comet_ml import Experiment
-
-import torch.nn.functional as F
-import torch, torchaudio
-from torch import Tensor, IntTensor
 from typing import List, Set, Dict, Tuple, Optional, Callable
-from torch.utils.data import Dataset, DataLoader
-import torch.nn as nn
-import torch.utils.data as data
 import os
 import ast
 
+# loggers
+from comet_ml import Experiment
+import wandb
+
+# model
 from model import SpeechRecognitionModel
 from decode import GreedyDecoder
 from metrics import wer, cer
-import torch.optim as optim
 from data import CharacterTokenizer, LibriDataset
 from argparse import ArgumentParser
 from IPython import embed
 
-from pytorch_lightning.core.lightning import LightningModule
-from pytorch_lightning import Trainer
-from pytorch_lightning.loggers import TensorBoardLogger, CometLogger, WandbLogger
-from pytorch_lightning.callbacks import ModelCheckpoint
+# torch
+import torch.nn.functional as F
+import torch, torchaudio
+import torch.optim as optim
+from torch import Tensor, IntTensor
+from torch.utils.data import Dataset, DataLoader
+import torch.nn as nn
+import torch.utils.data as data
 
+# lightning
+from pytorch_lightning import LightningModule, LightningDataModule, Trainer, seed_everything
+from pytorch_lightning.loggers import TensorBoardLogger, CometLogger, WandbLogger
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
+
+
+# setup
+warnings.filterwarnings("ignore") #, category=DeprecationWarning) 
 torchaudio.set_audio_backend("sox_io")
 
 ROOT_DIR = "/home/syl20/data/en/librispeech"
@@ -46,27 +54,19 @@ else:
 
 
 class LitSpeechRec(LightningModule):
-
     def __init__(self, model, args):
+        """method used to define model's parameters"""
         super().__init__()
         self.model = model
         self.criterion = nn.CTCLoss(blank=29, zero_infinity=True)
         self.args = args
         self.train_dl_length = len(self.train_dataloader())
+        # save hp to self.hparams
+        self.save_hyperparameters()
 
     def forward(self, x):
+        """for inference"""
         return self.model(x)
-
-    def configure_optimizers(self):
-        self.optimizer = optim.AdamW(self.model.parameters(), self.args.learning_rate)
-        self.scheduler = optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr=self.args.learning_rate, 
-                                            steps_per_epoch=self.train_dl_length,
-                                            epochs=self.args.epochs,
-                                            anneal_strategy='linear')
-        # self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        #                                 self.optimizer, mode='min',
-        #                                 factor=0.50, patience=6)
-        return [self.optimizer], [self.scheduler]
 
     def step(self, batch):
         spectrograms, labels, input_lengths, label_lengths = batch 
@@ -77,11 +77,13 @@ class LitSpeechRec(LightningModule):
         return loss
 
     def training_step(self, batch, batch_idx):
+        """return loss from single batch"""
         loss = self.step(batch)
-        logs = {'loss': loss, 'lr': self.optimizer.param_groups[0]['lr'] }
-        return {'loss': loss, 'log': logs}
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        return loss
 
     def train_dataloader(self):
+        '''returns training dataloader'''
         spec_aug = nn.Sequential(
         torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_mels=128),
         torchaudio.transforms.FrequencyMasking(freq_mask_param=15),
@@ -97,15 +99,10 @@ class LitSpeechRec(LightningModule):
 
     def validation_step(self, batch, batch_idx):
         loss = self.step(batch)
-        return {'val_loss': loss}
-
-    def validation_epoch_end(self, outputs):
-        avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-        self.scheduler.step(avg_loss)
-        tensorboard_logs = {'val_loss': avg_loss}
-        return {'val_loss': avg_loss, 'log': tensorboard_logs}
+        self.log('val_loss', loss, on_epoch=True, prog_bar=True, logger=True)
 
     def val_dataloader(self):
+        '''returns validation dataloader'''
         mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_mels=128)
         test_dataset = LibriDataset(ROOT_DIR, CharacterTokenizer, dataset=self.args.valid_url, transform=mel_spec)
         return DataLoader(dataset=test_dataset,
@@ -113,6 +110,32 @@ class LitSpeechRec(LightningModule):
                             num_workers=self.args.data_workers,
                             collate_fn=test_dataset.collate,
                             pin_memory=True)
+    
+    def test_step(self, batch, batch_idx):
+        loss = self.step(batch)
+        self.log('test_loss', loss, on_epoch=True, prog_bar=True, logger=True)
+
+    def test_dataloader(self):
+        '''returns test dataloader'''
+        mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_mels=128)
+        test_dataset = LibriDataset(ROOT_DIR, CharacterTokenizer, dataset=self.args.valid_url, transform=mel_spec)
+        return DataLoader(dataset=test_dataset,
+                            batch_size=self.args.batch_size,
+                            num_workers=self.args.data_workers,
+                            collate_fn=test_dataset.collate,
+                            pin_memory=True)
+
+    def configure_optimizers(self):
+        # define training optimizer
+        self.optimizer = optim.AdamW(self.model.parameters(), self.args.learning_rate)
+        self.scheduler = optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr=self.args.learning_rate, 
+                                            steps_per_epoch=self.train_dl_length,
+                                            epochs=self.args.epochs,
+                                            anneal_strategy='linear')
+        # self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        #                                 self.optimizer, mode='min',
+        #                                 factor=0.50, patience=6)
+        return [self.optimizer], [self.scheduler]
 
 
 def checkpoint_callback(args):
@@ -180,6 +203,7 @@ def get_args():
 
 
 if __name__ == "__main__":
+    # setup
     hparams = {
         "n_cnn_layers": 3,
         "n_rnn_layers": 5,
@@ -192,9 +216,12 @@ if __name__ == "__main__":
         "batch_size": 64,
         "epochs": 5
     }
-    
+    seed_everything(42)
+
+    # args
     args = get_args()
 
+    # model
     model = SpeechRecognitionModel(hparams['n_cnn_layers'], hparams['n_rnn_layers'], hparams['rnn_dim'],
         hparams['n_class'], hparams['n_feats'], hparams['stride'], hparams['dropout']
         )
@@ -204,17 +231,34 @@ if __name__ == "__main__":
     else:
         speech_module = LitSpeechRec(model, args)
 
+    # loggers
     tb_logger = TensorBoardLogger(args.logdir, name='speech_recognition')
-    wandb_logger = WandbLogger(name='test_log',project='speech_recognition')
+    wandb.login()
+    wandb_logger = WandbLogger(name=args.logdir,project='speech_recognition')
+    logger = wandb_logger
 
-    trainer = Trainer(logger=logger)
-
+    # trainer
+    # trainer = Trainer(logger=logger)
+    # trainer = Trainer(
+    #     max_epochs=args.epochs, gpus=args.gpus,
+    #     num_nodes=args.nodes, distributed_backend=None,
+    #     logger=logger, gradient_clip_val=1.0,
+    #     val_check_interval=args.valid_every,
+    #     checkpoint_callback=checkpoint_callback(args),
+    #     resume_from_checkpoint=args.resume_from_checkpoint
+    # )
+    #         checkpoint_callback=checkpoint_callback(args), 
+    
+    callbacks = [checkpoint_callback(args), EarlyStopping(monitor='val_loss')]
     trainer = Trainer(
-        max_epochs=args.epochs, gpus=args.gpus,
-        num_nodes=args.nodes, distributed_backend=None,
-        logger=logger, gradient_clip_val=1.0,
-        val_check_interval=args.valid_every,
-        checkpoint_callback=checkpoint_callback(args),
-        resume_from_checkpoint=args.resume_from_checkpoint
+        logger=logger,
+        gpus=-1,
+        max_epochs=5,
+        callbacks=callbacks,
+        resume_from_checkpoint=args.resume_from_checkpoint,
+        amp_level='O1',
+        precision=16
     )
     trainer.fit(speech_module)
+    trainer.test(speech_module)
+    wandb.finish()
