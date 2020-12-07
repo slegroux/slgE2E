@@ -3,12 +3,40 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from modules import BoringModel
 import torchaudio
+import pytorch_lightning as pl
 from IPython import embed
 import pytest
 
-from data import CharacterTokenizer, LibriDataset
+from data import CharacterTokenizer, LibriDataset, RandomDataset
 from model import CNNLayerNorm
+from metrics import accuracy
+
+def test_random_dataset():
+    size, n_samples = 32, 1000
+    train = RandomDataset(size, n_samples)
+    train = DataLoader(train, batch_size=64)
+    batch = next(iter(train))
+    assert (batch.shape) == torch.Size([64, 32])
+
+@pytest.fixture(scope='module')
+def data():
+    size, n_samples = 32, 1000
+    train = RandomDataset(size, n_samples)
+    train = DataLoader(train, batch_size=64)
+    val = RandomDataset(size, n_samples)
+    val = DataLoader(val, batch_size=64)
+    test = RandomDataset(size, n_samples)
+    test = DataLoader(test, batch_size=64)
+    data = {'train': train, 'val': val, 'test': test}
+    return(data)
+
+def test_light_module(data):
+    mdl = BoringModel()
+    trainer = pl.Trainer(max_epochs=1)
+    trainer.fit(model, data['train'], data['val'])
+    trainer.test(test_dataloaders=data['test'])
 
 def test_char_map():
     cm = CharacterTokenizer()
@@ -44,8 +72,16 @@ def test_ds():
 
     norm = CNNLayerNorm(128)
     normed = norm(next(iter(dl))[0])
-    embed()
 
+# METRICS
+def test_accuracy():
+    input = torch.Tensor([[0],[1],[1],[2],[0]])
+    targets = torch.Tensor([0],[1],[1],[2],[0])
+    print(accuracy(input, targets))
+
+# TRAIN
+def test_loss_batch():
+    pass
 
 
 
