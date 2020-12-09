@@ -1,2 +1,2 @@
 # slgE2E
-end to end speech recognition
+End to end speech recognition tutorial

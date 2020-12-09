@@ -1,18 +1,18 @@
 #!/usr/bin/env python
 # (c) 2020 Sylvain Le Groux <slegroux@ccrma.stanford.edu>
 
-import torchaudio
 import torch
 from torch.utils.data import Dataset
-from torchaudio.datasets import LIBRISPEECH
+
 import torch.nn as nn
 import string
 from typing import List, Set, Dict, Tuple, Optional, Callable
 from torch import Tensor, IntTensor
 from IPython import embed
 
+import torchaudio
 torchaudio.set_audio_backend("sox_io")
-LIBRI_DIR = "/home/syl20/data/en/librispeech"
+from torchaudio.datasets import LIBRISPEECH
 
 
 class CharacterTokenizer:
@@ -100,3 +100,14 @@ class LibriDataset(LIBRISPEECH):
 
         return(features, labels, features_len, labels_len)
 
+
+class RandomDataset(Dataset):
+    def __init__(self, size, num_samples):
+        self.len = num_samples
+        self.data = torch.randn(num_samples, size)
+
+    def __getitem__(self, index):
+        return self.data[index]
+
+    def __len__(self):
+        return self.len
