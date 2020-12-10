@@ -1,8 +1,12 @@
 #!/usr/bin/env python
+# (c) 2020 Sylvain Le Groux <slegroux@ccrma.stanford.edu>
+
+from typing import List, Set, Dict, Tuple, Optional, Callable
+from torch import Tensor
+import numpy as np
 
 def avg_wer(wer_scores, combined_ref_len):
     return float(sum(wer_scores)) / float(combined_ref_len)
-
 
 def _levenshtein_distance(ref, hyp):
     """Levenshtein distance is a string metric for measuring the difference
@@ -50,7 +54,6 @@ def _levenshtein_distance(ref, hyp):
 
     return distance[m % 2][n]
 
-
 def word_errors(reference, hypothesis, ignore_case=False, delimiter=' '):
     """Compute the levenshtein distance between reference sequence and
     hypothesis sequence in word-level.
@@ -74,7 +77,6 @@ def word_errors(reference, hypothesis, ignore_case=False, delimiter=' '):
 
     edit_distance = _levenshtein_distance(ref_words, hyp_words)
     return float(edit_distance), len(ref_words)
-
 
 def char_errors(reference, hypothesis, ignore_case=False, remove_space=False):
     """Compute the levenshtein distance between reference sequence and
@@ -103,7 +105,6 @@ def char_errors(reference, hypothesis, ignore_case=False, remove_space=False):
 
     edit_distance = _levenshtein_distance(reference, hypothesis)
     return float(edit_distance), len(reference)
-
 
 def wer(reference, hypothesis, ignore_case=False, delimiter=' '):
     """Calculate word error rate (WER). WER compares reference text and
@@ -175,3 +176,10 @@ def cer(reference, hypothesis, ignore_case=False, remove_space=False):
 
     cer = float(edit_distance) / ref_len
     return cer
+
+def accuracy(input:Tensor, targs:Tensor) -> Tensor:
+    "Accuracy"
+    n = targs.shape[0]
+    input = input.argmax(dim=1).view(n,-1)
+    targs = targs.view(n,-1)
+    return (input==targs).float().mean()

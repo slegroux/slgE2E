@@ -24,6 +24,9 @@ from modules import LitSpeech, LibriDataModule
 warnings.filterwarnings("ignore", module='torchaudio') #, category=DeprecationWarning) 
 warnings.simplefilter("ignore", UserWarning)
 
+# debug
+from IPython import embed
+
 # Reproductibility
 seed = 42
 np.random.seed(seed)
@@ -34,32 +37,25 @@ seed_everything(seed)
 
 def get_args():
     """ get arguments from model, data and training stages """
-    parser = ArgumentParser(description="train end2end speech recognizer", add_help=False)
+    parser = ArgumentParser(description="train end2end speech recognizer")
+    # Trainer args
+    parser = Trainer.add_argparse_args(parser)
     # Model
     parser = LitSpeech.add_model_specific_args(parser)
     # Data
     parser = LibriDataModule.add_argparse_args(parser)
-
-    # # Data
-    # parser.add_argument("--num_workers", default=4, type=int)
-    # parser.add_argument("--batch_size", default=40, type=int)
-    # parser.add_argument("--data_root", default="/mnt/kingston/datasets/", type=str)
-    # parser.add_argument(
-    #     "--data_train",
-    #     default=["train-clean-100", "train-clean-360", "train-other-500"],
-    # )
-    # parser.add_argument("--data_test", default=["test-clean"])
-
-    # Training params (opt)
-    parser.add_argument("--epochs", default=100, type=int)
-    # parser.add_argument("--learning_rate", default=0.0005, type=float)
-    parser.add_argument("--early_stop_metric", default="wer", type=str)
-    parser.add_argument("--log_dir", default="runs/", type=str)
+    # loger
+    parser.add_argument("--save_dir", default="wandb/", type=str)
     parser.add_argument("--experiment_name", default="speech_recognition", type=str)
+    # Training params (opt)
+    # parser.add_argument("--epochs", default=100, type=int)
+    # # parser.add_argument("--learning_rate", default=0.0005, type=float)
+    parser.add_argument("--early_stop_metric", default="val_loss", type=str)
     parser.add_argument("--early_stop_patience", default=3, type=int)
-    parser.add_argument("--resume_from_checkpoint", default=None, type=str)
-    parser.add_argument("--amp_level", default="02", type=str)
-    parser.add_argument("--precision", default=32, type=int)
+    # get these from trainer args
+    # parser.add_argument("--resume_from_checkpoint", default=None, type=str)
+    # parser.add_argument("--amp_level", default="02", type=str)
+    # parser.add_argument("--precision", default=32, type=int)
     args = parser.parse_args()
     return(args)
 
@@ -69,7 +65,16 @@ if __name__ == "__main__":
     args = get_args()
 
     # model
-    model = LitSpeech(args.n_cnn_layers, args.n_rnn_layers, args.rnn_dim, args.n_class, args.n_feats, args.stride, args.dropout)
+    model = LitSpeech(**vars(args))
+    # model = LitSpeech(
+    #     args.n_cnn_layers,
+    #     args.n_rnn_layers,
+    #     args.rnn_dim,
+    #     args.n_class,
+    #     args.n_feats,
+    #     args.stride,
+    #     args.dropout
+    # )
 
     # data
     dm = LibriDataModule.from_argparse_args(args)
@@ -82,9 +87,10 @@ if __name__ == "__main__":
     # loggers
     # tb_logger = TensorBoardLogger(args.logdir, name='speech_recognition')
     wandb.login()
-    wandb_logger = WandbLogger(name=args.log_dir,project=args.experiment_name)
+    # run_name = args.learning_rate + '_' + ''
+    wandb_logger = WandbLogger(name='test', save_dir=args.save_dir, project=args.experiment_name)
     logger = wandb_logger
-
+    # import pdb; pdb.set_trace()
     # trainer
     # trainer = Trainer(logger=logger)
     # trainer = Trainer(
@@ -100,7 +106,7 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(
         verbose=True,
         save_top_k=5,
-        monitor="wer",
+        monitor="val_loss",
         mode="min",
         period=1,
     )
@@ -113,15 +119,16 @@ if __name__ == "__main__":
     #     amp_level=args.amp_level,
     # precision=args.precision,
 
-    trainer = Trainer(
+    trainer = Trainer.from_argparse_args(
+        args,
         # fast_dev_run=True,
         logger=logger,
         gpus=-1,
-        max_epochs=200,
+        # max_epochs=10,
         callbacks=callbacks,
-        profiler=True
+        # profiler=True
     )
-    trainer.fit(model, dm)
+    trainer.fit(model, datamodule=dm)
 
     # trainer.test(speech_module)
     # wandb.finish()

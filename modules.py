@@ -62,7 +62,7 @@ class LitSpeech(LightningModule):
         self.save_hyperparameters()
         self.learning_rate = learning_rate
         self.model = SpeechRecognitionModel(n_cnn_layers, n_rnn_layers, rnn_dim, n_class, n_feats, stride=2, dropout=0.1)
-        self.criterion = nn.CTCLoss(blank=29, zero_infinity=True)
+        self.criterion = nn.CTCLoss(blank=29) #, zero_infinity=True)
         # self.train_dl_length = len(self.train_dataloader())        
 
     def forward(self, x):
@@ -71,9 +71,9 @@ class LitSpeech(LightningModule):
 
     def step(self, batch):
         spectrograms, labels, input_lengths, label_lengths = batch 
-        output = self.model(spectrograms)
+        output = self.model(spectrograms) # batch, frames, class
         output = F.log_softmax(output, dim=2)
-        output = output.transpose(0, 1)
+        output = output.transpose(0, 1) # frames, batch, class
         loss = self.criterion(output, labels, input_lengths, label_lengths)
         return loss
 
@@ -89,26 +89,25 @@ class LitSpeech(LightningModule):
         output = F.log_softmax(output, dim=2)
         output = output.transpose(0, 1)
         loss = self.criterion(output, labels, input_lengths, label_lengths)
-        decoded_preds, decoded_targets = GreedyDecoder(output.transpose(0, 1), labels, label_lengths)
+        # decoded_preds, decoded_targets = GreedyDecoder(output.transpose(0, 1), labels, label_lengths)
+        # test_cer, test_wer = [], []
+        # for j in range(len(decoded_preds)):
+        #     test_cer.append(cer(decoded_targets[j], decoded_preds[j]))
+        #     test_wer.append(wer(decoded_targets[j], decoded_preds[j]))
 
-        test_cer, test_wer = [], []
-        for j in range(len(decoded_preds)):
-            test_cer.append(cer(decoded_targets[j], decoded_preds[j]))
-            test_wer.append(wer(decoded_targets[j], decoded_preds[j]))
+        # avg_cer = torch.FloatTensor([sum(test_cer) / len(test_cer)])
+        # avg_wer = torch.FloatTensor([sum(test_wer) / len(test_wer)])  # Need workt to make all operations in torch
 
-        avg_cer = torch.FloatTensor([sum(test_cer) / len(test_cer)])
-        avg_wer = torch.FloatTensor([sum(test_wer) / len(test_wer)])  # Need workt to make all operations in torch
-
-        return {'val_loss': loss, 'cer': avg_cer, 'wer': avg_wer}
+        return {'val_loss': loss} #, 'cer': avg_cer, 'wer': avg_wer}
 
     def validation_step(self, batch, batch_idx):
         loss = self.v_step(batch)['val_loss']
-        cer_ = self.v_step(batch)['cer']
-        wer_ = self.v_step(batch)['wer']
-        self.log("cer", cer_, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log("wer", wer_, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        # cer_ = self.v_step(batch)['cer']
+        # wer_ = self.v_step(batch)['wer']
+        # self.log("cer", cer_, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        # self.log("wer", wer_, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        return {'loss': loss}
+        return {'val_loss': loss}
 
     # def validation_epoch_end(self, outputs):
     #     """
@@ -124,7 +123,7 @@ class LitSpeech(LightningModule):
 
     def validation_epoch_end(self, val_step_outputs):
         # [results epoch 1, results epoch 2, ...]
-        avg_val_loss = torch.Tensor([ x['loss'] for x in val_step_outputs ]).mean()
+        avg_val_loss = torch.Tensor([ x['val_loss'] for x in val_step_outputs ]).mean()
         return {'val_loss': avg_val_loss}
     
     def test_step(self, batch, batch_idx):
@@ -148,7 +147,7 @@ class LitSpeech(LightningModule):
         """
         Define parameters that only apply to this model
         """
-        parser = ArgumentParser(parents=[parent_parser])
+        parser = ArgumentParser(parents=[parent_parser], add_help=False)
         parser.add_argument("--n_cnn_layers", default=3, type=int)
         parser.add_argument("--n_rnn_layers", default=5, type=int)
         parser.add_argument("--rnn_dim", default=512, type=int)
@@ -156,12 +155,25 @@ class LitSpeech(LightningModule):
         parser.add_argument("--n_feats", default=128, type=str)
         parser.add_argument("--stride", default=2, type=int)
         parser.add_argument("--dropout", default=0.1, type=float)
+        parser.add_argument("--learning_rate", default=5e-4, type=float)
 
         return parser
 
 
 class LibriDataModule(LightningDataModule):
-    def __init__(self, data_dir='/home/syl20/data/en/librispeech', train_set='train-clean-5', val_set='dev-clean-2', test_set='dev-clean-2', batch_size=64, num_workers=(torch.get_num_threads()-2)):
+    def __init__(
+            self,
+            data_dir='/home/syl20/data/en/librispeech',
+            train_set='train-clean-5',
+            val_set='dev-clean-2',
+            test_set='dev-clean-2',
+            batch_size=64,
+            num_workers=60,
+            sample_rate=16000,
+            n_mels=128,
+            freq_mask_param=15,
+            time_mask_param=35
+        ):
         super().__init__()
         self.data_dir = data_dir
         self.train_set = train_set
@@ -169,11 +181,16 @@ class LibriDataModule(LightningDataModule):
         self.test_set = test_set
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.val_transform = MelSpectrogram(sample_rate=16000, n_mels=128)
+        self.sample_rate = sample_rate
+        self.n_mels = n_mels
+        self.freq_mask_param = freq_mask_param
+        self.time_mask_param = time_mask_param
+
+        self.val_transform = MelSpectrogram(sample_rate=self.sample_rate, n_mels=self.n_mels)
         self.train_transform = nn.Sequential(
-            MelSpectrogram(sample_rate=16000, n_mels=128),
-            FrequencyMasking(freq_mask_param=15),
-            TimeMasking(time_mask_param=35)
+            MelSpectrogram(sample_rate=self.sample_rate, n_mels=self.n_mels),
+            FrequencyMasking(freq_mask_param=self.freq_mask_param),
+            TimeMasking(time_mask_param=self.time_mask_param)
         )
     
     def prepare_data(self):
@@ -194,6 +211,7 @@ class LibriDataModule(LightningDataModule):
     def train_dataloader(self):
         return DataLoader(dataset=self.train,
                 batch_size=self.batch_size,
+                shuffle=True,
                 num_workers=self.num_workers,
                 collate_fn=self.train.collate,
                 pin_memory=True)
@@ -201,6 +219,7 @@ class LibriDataModule(LightningDataModule):
     def val_dataloader(self):
         return DataLoader(dataset=self.val,
                 batch_size=self.batch_size,
+                shuffle=True,
                 num_workers=self.num_workers,
                 collate_fn=self.val.collate,
                 pin_memory=True)    
@@ -208,21 +227,26 @@ class LibriDataModule(LightningDataModule):
     def test_dataloader(self):
         return DataLoader(dataset=self.test,
                 batch_size=self.batch_size,
+                shuffle=True,
                 num_workers=self.num_workers,
                 collate_fn=self.test.collate,
                 pin_memory=True)
 
-    # @staticmethod
-    # def add_argparse_args(parent_parser):
-    #     """
-    #     Define parameters that only apply to this model
-    #     """
-    #     parser = ArgumentParser(parents=[parent_parser])
-    #     parser.add_argument("--data_dir", default='/home/syl20/data/en/librispeech', type=str)
-    #     parser.add_argument("--train_set", default='train-clean-5', type=str)
-    #     parser.add_argument("--val_set", default='dev-clean-2', type=str)
-    #     parser.add_argument("--test_set", default='dev-clean-2', type=str)
-    #     parser.add_argument("--batch_size", default=64, type=int)
-    #     parser.add_argument("--num_workers", default=100, type=int)
+    @staticmethod
+    def add_argparse_args(parent_parser):
+        """
+        Define parameters that only apply to this model
+        """
+        parser = ArgumentParser(parents=[parent_parser], add_help=False)
+        parser.add_argument("--data_dir", default='/home/syl20/data/en/librispeech', type=str)
+        parser.add_argument("--train_set", default='train-clean-5', type=str)
+        parser.add_argument("--val_set", default='dev-clean-2', type=str)
+        parser.add_argument("--test_set", default='dev-clean-2', type=str)
+        parser.add_argument("--batch_size", default=64, type=int)
+        parser.add_argument("--num_workers", default=100, type=int)
+        parser.add_argument("--sample_rate", default=16000, type=int)
+        parser.add_argument("--n_mels", default=128, type=int)
+        parser.add_argument("--freq_mask_param", default=15, type=int)
+        parser.add_argument("--time_mask_param", default=35, type=int)
 
-    #     return parser
+        return parser
